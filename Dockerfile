@@ -1,31 +1,22 @@
-FROM rust:latest as build
-
-# create a new empty shell project
-RUN USER=root cargo new --bin pin-bot
+FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
 WORKDIR /pin-bot
 
-# copy over your manifests
-COPY ./Cargo.lock ./Cargo.lock
-COPY ./Cargo.toml ./Cargo.toml
+FROM chef AS planner
+# prepare dependencies for caching
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
 
-# this build step will cache your dependencies
-RUN cargo build --release & rm src/*.rs
+FROM chef AS builder
+# build project dependencies
+COPY --from=planner /pin-bot/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+# build project
+COPY . .
+RUN cargo build --release --bin pin-bot
 
-# copy your source tree
-COPY ./src ./src
-COPY ./build.rs ./build.rs
+FROM gcr.io/distroless/cc-debian12 as runtime
+# copy missing dynamic libraries
+COPY --from=chef --chown=root:root /lib/x86_64-linux-gnu/libz.so.1 /lib/x86_64-linux-gnu/libz.so.1
 
-# build for release
-RUN cargo build --release
-
-FROM gcr.io/distroless/java17 as libz-required
-
-# our final base
-FROM gcr.io/distroless/cc
-
-# copy the build artifact from the build stage
-COPY --from=libz-required --chown=root:root /lib/x86_64-linux-gnu/libz.so.1 /lib/x86_64-linux-gnu/libz.so.1
-COPY --from=build /pin-bot/target/release/pin-bot /
-
-# set the startup command to run your binary
-CMD ["./pin-bot"]
+COPY --from=builder /pin-bot/target/release/pin-bot /pin-bot
+ENTRYPOINT ["./pin-bot"]
